@@ -18,6 +18,7 @@ from main.models import Agent, File
 import metsrw
 
 logger = get_script_logger("archivematica.mcp.client.parse_dataverse_mets")
+transfer_objects_directory = "%transferDirectory%objects"
 
 
 def concurrent_instances(): return 1
@@ -40,16 +41,19 @@ def get_db_objects(job, mets, transfer_uuid):
         # TODO remove this once RData files are returned
         if entry.path.endswith('.RData'):
             continue
-        # Get DB entry
-        # Assuming that Dataverse has a flat file structure, so a filename
-        # uniquely identifies a file.
-
+        # Retrieve the item name from the database. The proof-of-concept for
+        # Dataverse extracts objects from a bundle (zip) which can then be
+        # found on the root path of the transfer (the objects folder), but
+        # that means the initial lookup of the file might not resolve as
+        # anticipated as the directory structure of the bundle is reflected in
+        # the original path. We try the base name for the item below.
         f = None
         try:
+            item_path = os.path.join(transfer_objects_directory, entry.path)
             job.pyprint(
                 "Looking for for file type: '{}' using relative path: {}"
-                .format(entry.type, entry.path))
-            f = File.objects.get(originallocation__endswith=entry.path,
+                .format(entry.type, item_path))
+            f = File.objects.get(originallocation=item_path,
                                  transfer_id=transfer_uuid)
         except File.DoesNotExist:
             logger.info(
@@ -60,14 +64,16 @@ def get_db_objects(job, mets, transfer_uuid):
                         entry.path, e)
 
         try:
-            # Actual extracted folder likely has a different path than the
-            # presumed one in the METS. Search on basename
+            # Attempt to find the original location through just its filename
+            # as it may be sitting in the root item/objects directory of the
+            # transfer.
             if f is None:
                 base_name = os.path.basename(entry.path)
-                job.pyprint("Looking for for file type: '{}' using base name: {}"
-                            .format(entry.type, base_name))
+                item_path = os.path.join(transfer_objects_directory, base_name)
+                job.pyprint("Looking for for file type: '{}' using "
+                            "base name: {}".format(entry.type, item_path))
                 f = File.objects.get(
-                    originallocation__endswith=base_name,
+                    originallocation=item_path,
                     transfer_id=transfer_uuid)
         except File.DoesNotExist:
             logger.error(
@@ -162,11 +168,16 @@ def validate_checksums(job, mapping, unit_path):
     for entry, f in mapping.items():
         if entry.checksum and entry.checksumtype:
             job.pyprint('Checking checksum', entry.checksum, 'for', entry.label)
+            if f.currentlocation is None and f.removedtime is not None:
+                logger.info("File: %s removed by extract packages?", entry.label)
+                continue
+            path_ = f.currentlocation.replace('%transferDirectory%', unit_path)
+            if os.path.isdir(path_):
+                continue
             verify_checksum(
                 job=job,
                 file_uuid=f.uuid,
-                path=f.currentlocation.replace(
-                    '%transferDirectory%', unit_path),
+                path=path_,
                 checksum=entry.checksum,
                 checksumtype=entry.checksumtype,
                 date=date,
