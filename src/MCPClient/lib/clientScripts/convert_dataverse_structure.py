@@ -319,9 +319,10 @@ def map_(job, unit_path, unit_uuid, dataset_md_name="dataset.json",
                     checksum=file_json["dataFile"]["md5"],
                 )
                 sip.add_child(f)
-            logger.error(
-                "Problem retrieving filename from metadata, returned "
-                "datafile: %s, path: %s", datafile, path_)
+            else:
+                logger.error(
+                    "Problem retrieving filename from metadata, returned "
+                    "datafile: %s, path: %s", datafile, path_)
 
     # Add metadata directory
     md_dir = metsrw.FSEntry(path="metadata", use=None, type="Directory")
