@@ -24,3 +24,6 @@
 # frontend builds
 src/dashboard/src/static/
 src/dashboard/src/media/js/build
+
+# Dataverse: Tests output directory
+src/MCPClient/tests/fixtures/dataverse/dataverse_sources/dataverse_mets

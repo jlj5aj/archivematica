@@ -19,7 +19,6 @@ logger = get_script_logger("archivematica.mcp.client.convert_dataverse_struct")
 
 
 THIS_DIR = os.path.abspath(os.path.dirname(__file__))
-DISTRBTR = "SP Dataverse Network"
 
 # Mapping from originalFormatLabel in dataset.json to file extension. The
 # values here are associated with Dataverse Bundles, created when Tabular data
@@ -41,30 +40,50 @@ EXTENSION_MAPPING = {
 def concurrent_instances(): return 1
 
 
-def get_ddi_titl_author(j):
-    titl_text = authenty_text = None
-    for field in j["latestVersion"]["metadataBlocks"]["citation"]["fields"]:
-        if field["typeName"] == "title":
-            titl_text = field["value"]
-        if field["typeName"] == "author":
-            authenty_text = field["value"][0]["authorName"]["value"]
-    return titl_text, authenty_text
+def get_ddi_title_author(dataset_md_latest):
+    title_text = author_text = None
+    citation = dataset_md_latest.get("metadataBlocks", {}).get("citation")
+    if citation:
+        for field in citation.get("fields"):
+            if field.get("typeName") == "title":
+                title_text = field.get("value")
+            if field.get("typeName") == "author":
+                author_text = field.get("value")[0].get("authorName")\
+                    .get("value")
+        return title_text.strip(), author_text.strip()
 
 
-def create_ddi(j):
+def create_ddi(job, json_metadata):
     """
     Create the DDI dmdSec from JSON information. Returns Element.
     """
-    # Get data
-    titl_text, authenty_text = get_ddi_titl_author(j)
-    agency = j["protocol"]
-    idno = j["authority"] + "/" + j["identifier"]
-    version_date = j["latestVersion"]["releaseTime"]
-    version_type = j["latestVersion"]["versionState"]
+    dataset_md_latest = get_latest_version_metadata(json_metadata)
+    try:
+        title_text, author_text = get_ddi_title_author(dataset_md_latest)
+    except TypeError as e:
+        logger.error("Unable to gather citation data from dataset.json: %s", e)
+        return
+
+    agency = json_metadata.get("protocol")
+    idno = json_metadata.get("persistentUrl")
+    version_date = dataset_md_latest.get("releaseTime")
+    version_type = dataset_md_latest.get("versionState")
     version_num = "{}.{}".format(
-        j["latestVersion"]["versionNumber"], j["latestVersion"]["versionMinorNumber"]
+        dataset_md_latest.get("versionNumber"),
+        dataset_md_latest.get("versionMinorNumber")
     )
-    restrctn_text = j["latestVersion"].get("termsOfUse")
+    restriction_text = dataset_md_latest.get("termsOfUse")
+    distributor_text = json_metadata.get("publisher")
+
+    fields_log = (
+        "Fields retrieved from Dataverse:\ntitle: {}\nauthor: {}\n"
+        "agency: {}\nidno: {}\nversion_date: {}\nversion_type: {}\n"
+        "version_num: {}\nrestriction_text: {}\ndistributor_text: {}\n"
+        .format(
+            title_text, author_text, agency, idno, version_date, version_type,
+            version_num, restriction_text, distributor_text))
+
+    job.pyprint(fields_log)
 
     # create XML
     nsmap = {"ddi": "http://www.icpsr.umich.edu/DDI"}
@@ -83,14 +102,14 @@ def create_ddi(j):
     citation = etree.SubElement(stdydscr, ddins + "citation", nsmap=nsmap)
 
     titlstmt = etree.SubElement(citation, ddins + "titlStmt", nsmap=nsmap)
-    etree.SubElement(titlstmt, ddins + "titl", nsmap=nsmap).text = titl_text
+    etree.SubElement(titlstmt, ddins + "titl", nsmap=nsmap).text = title_text
     etree.SubElement(titlstmt, ddins + "IDNo", agency=agency).text = idno
 
     rspstmt = etree.SubElement(citation, ddins + "rspStmt")
-    etree.SubElement(rspstmt, ddins + "AuthEnty").text = authenty_text
+    etree.SubElement(rspstmt, ddins + "AuthEnty").text = author_text
 
     diststmt = etree.SubElement(citation, ddins + "distStmt")
-    etree.SubElement(diststmt, ddins + "distrbtr").text = DISTRBTR
+    etree.SubElement(diststmt, ddins + "distrbtr").text = distributor_text
 
     verstmt = etree.SubElement(citation, ddins + "verStmt")
     etree.SubElement(
@@ -99,7 +118,7 @@ def create_ddi(j):
 
     dataaccs = etree.SubElement(stdydscr, ddins + "dataAccs")
     usestmt = etree.SubElement(dataaccs, ddins + "useStmt")
-    etree.SubElement(usestmt, ddins + "restrctn").text = restrctn_text
+    etree.SubElement(usestmt, ddins + "restrctn").text = restriction_text
 
     return ddi_root
 
@@ -212,14 +231,17 @@ def map_(job, unit_path, unit_uuid, dataset_md_name="dataset.json",
     json_path = os.path.join(unit_path, "metadata", dataset_md_name)
     logger.info("Metadata directory exists %s", os.path.exists(json_path))
     with open(json_path, "r") as f:
-        j = json.load(f)
+        json_metadata = json.load(f)
 
     # Parse DDI into XML
-    ddi_root = create_ddi(j)
+    ddi_root = create_ddi(job, json_metadata)
+
+    latest_version_md = get_latest_version_metadata(json_metadata)
 
     # Create METS
     sip = metsrw.FSEntry(
-        path=None, label=get_ddi_titl_author(j)[0], use=None, type="Directory"
+        path="None", label=get_ddi_title_author(latest_version_md)[0],
+        use=None, type="Directory"
     )
     sip.add_dmdsec(md=ddi_root, mdtype="DDI")
     sip.add_dmdsec(
@@ -233,9 +255,11 @@ def map_(job, unit_path, unit_uuid, dataset_md_name="dataset.json",
 
     # Add original files to the METS document.
     files = {}
-    latest_version = j.get("latestVersion")
-    if latest_version:
-        files = latest_version.get('files')
+    latest_version = latest_version_md
+    files = latest_version_md.get('files')
+
+    if not files:
+        return 1
 
     # If a dataset is restricted we may not have access to all the files. We
     # may also want to flag this dataset to the users of this service. We
@@ -326,6 +350,26 @@ def map_(job, unit_path, unit_uuid, dataset_md_name="dataset.json",
     logger.debug(mets_f.tostring(fully_qualified=True).decode('ascii'))
     mets_f.write(mets_path, pretty_print=True, fully_qualified=True)
     return 0
+
+
+def get_latest_version_metadata(json_metadata):
+    """If the datatset has been downloaded from the Dataverse web ui then there
+    is a slightly different structure. While the structure is different, the
+    majority of fields should remain the same and work with Archivematica. Just
+    in case, we log the version here and inform the user of potential
+    compatibility issues.
+
+    Ref: https://github.com/IQSS/dataverse/issues/4715
+    """
+    datasetVersion = json_metadata.get("datasetVersion")
+    if datasetVersion:
+        logger.info(
+            "Dataset seems to have been downloaded from the Dataverse Web UI."
+            "Some features of this method may be incompatible with "
+            "Archivematica at present.")
+        return datasetVersion
+    else:
+        return json_metadata.get("latestVersion")
 
 
 def map_dataverse(job):
