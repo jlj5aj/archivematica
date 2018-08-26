@@ -31,7 +31,7 @@ import metsrw
 logger = get_script_logger("archivematica.mcp.client.createMETSDataverse")
 
 
-def create_dataverse_sip_dmdsec(sip_path):
+def create_dataverse_sip_dmdsec(job, sip_path):
     """
     Return SIP-level Dataverse dmdSecs for inclusion in the AIP METS.
 
@@ -52,8 +52,8 @@ def create_dataverse_sip_dmdsec(sip_path):
         try:
             mets = metsrw.METSDocument.fromfile(metadata_path)
         except mets.MetsError:
-            print('Could not parse external METS (Dataverse)',
-                  metadata_path, file=sys.stderr)
+            job.pyprint('Could not parse external METS (Dataverse)',
+                        metadata_path, file=sys.stderr)
             continue
 
         # Get SIP-level DDI
@@ -66,7 +66,7 @@ def create_dataverse_sip_dmdsec(sip_path):
     return ret
 
 
-def create_dataverse_tabfile_dmdsec(sip_path, tabfile):
+def create_dataverse_tabfile_dmdsec(job, sip_path, tabfile):
     """
     Returns dmdSec associated with the given tabfile, if one exists.
     """
@@ -84,8 +84,8 @@ def create_dataverse_tabfile_dmdsec(sip_path, tabfile):
         try:
             mets = metsrw.METSDocument.fromfile(metadata_path)
         except mets.MetsError:
-            print('Could not parse external METS (Dataverse)',
-                  metadata_path, file=sys.stderr)
+            job.pyprint('Could not parse external METS (Dataverse)',
+                        metadata_path, file=sys.stderr)
             continue
 
         # Get SIP-level DDI

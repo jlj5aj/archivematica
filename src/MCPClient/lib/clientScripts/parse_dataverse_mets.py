@@ -20,7 +20,10 @@ import metsrw
 logger = get_script_logger("archivematica.mcp.client.parse_dataverse_mets")
 
 
-def get_db_objects(mets, transfer_uuid):
+def concurrent_instances(): return 1
+
+
+def get_db_objects(job, mets, transfer_uuid):
     """
     Get DB objects for files in METS.
 
@@ -43,8 +46,9 @@ def get_db_objects(mets, transfer_uuid):
 
         f = None
         try:
-            print("Looking for for file type: '{}' using relative path: {}"
-                  .format(entry.type, entry.path))
+            job.pyprint(
+                "Looking for for file type: '{}' using relative path: {}"
+                .format(entry.type, entry.path))
             f = File.objects.get(originallocation__endswith=entry.path,
                                  transfer_id=transfer_uuid)
         except File.DoesNotExist:
@@ -60,8 +64,8 @@ def get_db_objects(mets, transfer_uuid):
             # presumed one in the METS. Search on basename
             if f is None:
                 base_name = os.path.basename(entry.path)
-                print("Looking for for file type: '{}' using base name: {}"
-                      .format(entry.type, base_name))
+                job.pyprint("Looking for for file type: '{}' using base name: {}"
+                            .format(entry.type, base_name))
                 f = File.objects.get(
                     originallocation__endswith=base_name,
                     transfer_id=transfer_uuid)
@@ -76,13 +80,13 @@ def get_db_objects(mets, transfer_uuid):
                         base_name, e)
             return None
 
-        print("Adding mapping dict [{}] entry: {}".format(entry, f))
+        job.pyprint("Adding mapping dict [{}] entry: {}".format(entry, f))
         mapping[entry] = f
 
     return mapping
 
 
-def update_file_use(mapping):
+def update_file_use(job, mapping):
     """
     Update the file's USE for files in mets.
 
@@ -91,11 +95,11 @@ def update_file_use(mapping):
     """
     for entry, f in mapping.items():
         f.filegrpuse = entry.use
-        print(entry.label, 'file group use set to', entry.use)
+        job.pyprint(entry.label, 'file group use set to', entry.use)
         f.save()
 
 
-def add_external_agents(unit_path):
+def add_external_agents(job, unit_path):
     """
     Add external agent(s).
 
@@ -117,15 +121,15 @@ def add_external_agents(unit_path):
             agenttype=agent['agentType'],
         )
         if created:
-            print('Added agent', agent)
+            job.pyprint('Added agent', agent)
         else:
-            print('Agent already exists', agent)
+            job.pyprint('Agent already exists', agent)
         agent_id = agent_id or a.id
 
     return agent_id
 
 
-def create_derivatives(mapping, dataverse_agent_id):
+def create_derivatives(job, mapping, dataverse_agent_id):
     """
     Create derivatives for derived tabular data.
     """
@@ -150,15 +154,16 @@ def create_derivatives(mapping, dataverse_agent_id):
                 derivedFileUUID=f.uuid,
                 relatedEventUUID=event_uuid,
             )
-            print('Added derivation from', original_uuid, 'to', f.uuid)
+            job.pyprint('Added derivation from', original_uuid, 'to', f.uuid)
 
 
-def validate_checksums(mapping, unit_path):
+def validate_checksums(job, mapping, unit_path):
     date = timezone.now().isoformat(' ')
     for entry, f in mapping.items():
         if entry.checksum and entry.checksumtype:
-            print('Checking checksum', entry.checksum, 'for', entry.label)
+            job.pyprint('Checking checksum', entry.checksum, 'for', entry.label)
             verify_checksum(
+                job=job,
                 file_uuid=f.uuid,
                 path=f.currentlocation.replace(
                     '%transferDirectory%', unit_path),
@@ -168,8 +173,8 @@ def validate_checksums(mapping, unit_path):
             )
 
 
-def verify_checksum(
-        file_uuid, path, checksum, checksumtype, event_id=None, date=None):
+def verify_checksum(job, file_uuid, path, checksum, checksumtype,
+                    event_id=None, date=None):
     """
     Verify the checksum of a given file, and create a fixity event.
 
@@ -190,11 +195,11 @@ def verify_checksum(
     event_detail = ('program="python"; '
                     'module="hashlib.{}()"'.format(checksumtype))
     if checksum != generated_checksum:
-        print('Checksum failed')
+        job.pyprint('Checksum failed')
         event_outcome = "Fail"
         detail_note = 'Dataverse checksum %s verification failed' % checksum
     else:
-        print('Checksum passed')
+        job.pyprint('Checksum passed')
         event_outcome = "Pass"
         detail_note = 'Dataverse checksum %s verified' % checksum
 
@@ -209,42 +214,42 @@ def verify_checksum(
     )
 
 
-def parse_(unit_path, unit_uuid):
+def parse_(job, unit_path, unit_uuid):
     """Access the existing METS file and extract and validate its components.
     """
     dataverse_mets_path = os.path.join(unit_path, 'metadata', 'METS.xml')
     mets = metsrw.METSDocument.fromfile(dataverse_mets_path)
-    mapping = get_db_objects(mets, unit_uuid)
+    mapping = get_db_objects(job, mets, unit_uuid)
     if mapping is None:
         logger.error(
             "Exiting. Returning the database objects for our Dataverse "
             "files has failed.")
         return 1
-    update_file_use(mapping)
-    agent = add_external_agents(unit_path)
-    create_derivatives(mapping, agent)
-    validate_checksums(mapping, unit_path)
+    update_file_use(job, mapping)
+    agent = add_external_agents(job, unit_path)
+    create_derivatives(job, mapping, agent)
+    validate_checksums(job, mapping, unit_path)
     return 0
 
 
-def parse_dataverse_mets(args_):
+def parse_dataverse_mets(job):
     """Extract the arguments provided to the script and call the primary
     function concerned with parsing Dataverse METS.
     """
     try:
-        transfer_dir = args_[1]
-        transfer_uuid = args_[2]
+        transfer_dir = job.args[1]
+        transfer_uuid = job.args[2]
         logger.info("Parse Dataverse METS with dir args: '%s' and transfer "
                     "uuid: %s", transfer_dir, transfer_uuid)
-        return parse_(transfer_dir, transfer_uuid)
+        return parse_(job, transfer_dir, transfer_uuid)
     except IndexError:
         logger.error(
             "Problem with the supplied arguments to the function "
-            "len: %s", len(args_))
+            "len: %s", len(job.args))
         return 1
 
 
 def call(jobs):
     for job in jobs:
         with job.JobContext(logger=logger):
-            job.set_status(parse_dataverse_mets(job.args))
+            job.set_status(parse_dataverse_mets(job))

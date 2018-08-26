@@ -38,6 +38,9 @@ EXTENSION_MAPPING = {
 }
 
 
+def concurrent_instances(): return 1
+
+
 def get_ddi_titl_author(j):
     titl_text = authenty_text = None
     for field in j["latestVersion"]["metadataBlocks"]["citation"]["fields"]:
@@ -101,15 +104,15 @@ def create_ddi(j):
     return ddi_root
 
 
-def create_bundle(tabfile_json):
+def create_bundle(job, tabfile_json):
     """
     Creates and returns the metsrw entries for a tabfile's bundle
     """
     # Base name is .tab with suffix stripped
     tabfile_name = tabfile_json.get("label")
     if tabfile_name is not None:
-        print("Creating entries for tabfile bundle {}"
-              .format(tabfile_name))
+        job.pyprint("Creating entries for tabfile bundle {}"
+                    .format(tabfile_name))
         base_name = tabfile_name[:-4]
         bundle = metsrw.FSEntry(path=base_name, type="Directory")
         # Find the original file and add it to the METS FS Entries.
@@ -198,7 +201,7 @@ def test_if_zip_in_name(fname):
     return False
 
 
-def map_(unit_path, unit_uuid, dataset_md_name="dataset.json",
+def map_(job, unit_path, unit_uuid, dataset_md_name="dataset.json",
          md_path=None, md_name=None):
     """Docstring..."""
     logger.info(
@@ -263,7 +266,7 @@ def map_(unit_path, unit_uuid, dataset_md_name="dataset.json",
             # A Tabular Data File from Dataverse will consist of an original
             # tabular format submitted by the researcher plus multiple
             # different representations. We need to map that here.
-            bundle = create_bundle(file_json)
+            bundle = create_bundle(job, file_json)
             if bundle:
                 sip.add_child(bundle)
             else:
@@ -320,29 +323,29 @@ def map_(unit_path, unit_uuid, dataset_md_name="dataset.json",
     mets_path = os.path.join(metadata_path, metadata_name)
     mets_f = metsrw.METSDocument()
     mets_f.append_file(sip)
-    # print(mets_f.tostring(fully_qualified=True).decode('ascii'))
+    logger.debug(mets_f.tostring(fully_qualified=True).decode('ascii'))
     mets_f.write(mets_path, pretty_print=True, fully_qualified=True)
     return 0
 
 
-def map_dataverse(args_):
+def map_dataverse(job):
     """Extract the arguments provided to the script and call the primary
     function concerned with converting the Dataverse metadata JSON.
     """
     try:
-        transfer_dir = args_[1]
-        transfer_uuid = args_[2]
+        transfer_dir = job.args[1]
+        transfer_uuid = job.args[2]
         logger.info("Convert Dataverse Structure with dir args: '%s' "
                     "and transfer uuid: %s", transfer_dir, transfer_uuid)
-        return map_(unit_path=transfer_dir, unit_uuid=transfer_uuid)
+        return map_(job, unit_path=transfer_dir, unit_uuid=transfer_uuid)
     except IndexError:
         logger.error(
             "Problem with the supplied arguments to the function "
-            "len: %s", len(args_))
+            "len: %s", len(job.args))
         return 1
 
 
 def call(jobs):
     for job in jobs:
         with job.JobContext(logger=logger):
-            job.set_status(map_dataverse(job.args))
+            job.set_status(map_dataverse(job))
