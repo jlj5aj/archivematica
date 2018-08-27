@@ -21,9 +21,6 @@ logger = get_script_logger("archivematica.mcp.client.parse_dataverse_mets")
 transfer_objects_directory = "%transferDirectory%objects"
 
 
-def concurrent_instances(): return 1
-
-
 def get_db_objects(job, mets, transfer_uuid):
     """
     Get DB objects for files in METS.
@@ -50,7 +47,7 @@ def get_db_objects(job, mets, transfer_uuid):
         f = None
         try:
             item_path = os.path.join(transfer_objects_directory, entry.path)
-            job.pyprint(
+            logger.info(
                 "Looking for for file type: '{}' using relative path: {}"
                 .format(entry.type, item_path))
             f = File.objects.get(originallocation=item_path,
@@ -70,7 +67,7 @@ def get_db_objects(job, mets, transfer_uuid):
             if f is None:
                 base_name = os.path.basename(entry.path)
                 item_path = os.path.join(transfer_objects_directory, base_name)
-                job.pyprint("Looking for for file type: '{}' using "
+                logger.info("Looking for for file type: '{}' using "
                             "base name: {}".format(entry.type, item_path))
                 f = File.objects.get(
                     originallocation=item_path,
@@ -167,9 +164,11 @@ def validate_checksums(job, mapping, unit_path):
     date = timezone.now().isoformat(' ')
     for entry, f in mapping.items():
         if entry.checksum and entry.checksumtype:
-            job.pyprint('Checking checksum', entry.checksum, 'for', entry.label)
+            job.pyprint(
+                'Checking checksum', entry.checksum, 'for', entry.label)
             if f.currentlocation is None and f.removedtime is not None:
-                logger.info("File: %s removed by extract packages?", entry.label)
+                logger.info(
+                    "File: %s removed by extract packages?", entry.label)
                 continue
             path_ = f.currentlocation.replace('%transferDirectory%', unit_path)
             if os.path.isdir(path_):

@@ -1,5 +1,21 @@
 # -*- coding: utf-8 -*-
-"""Migration to create a Dataverse Transfer Type."""
+"""Migration to create a Dataverse Transfer Type.
+
+This migration introduces a new transfer type for Dataverse,
+https://dataverse.org/ datasets.
+
+The migration also introduces two new microservices:
+
+* Convert Dataverse Structure
+* Parse Dataverse METS
+
+In order to do that, the transfer workflow requires two signals in the form
+of unit variables to read from when the new microservice tasks need to be
+performed.
+
+Once the tasks have completed, the workflow is picked up from where it would
+normally for a standard transfer type.
+"""
 
 from __future__ import unicode_literals
 

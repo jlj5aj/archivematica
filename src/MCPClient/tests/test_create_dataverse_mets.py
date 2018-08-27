@@ -21,54 +21,35 @@ import convert_dataverse_structure
 
 # List of dataverse metadata fixtures. We use a namedtuple to provide some
 # structure to this index so that we can keep track of information regarding
-# dataverse over time, e.g. dataverse version number, the date the dataset was
-# created, and so forth.
+# dataverse over time, e.g. dataverse version number, the dataset uri and so
+# forth.
 DataverseMDIndex = namedtuple('DataverseMDIndex',
-                              'dv_version created_date title url fname')
+                              'dv_version url fname')
 
 dv_1 = DataverseMDIndex("4.8.6",
-                        "2016-03-10T14:55:44Z",
-                        "Test Dataset",
                         "http://dx.doi.org/10.5072/FK2/XSAZXH",
                         "web_ui_demo.dataverse.org.doi.10.5072.1.json")
-
 dv_2 = DataverseMDIndex("4.8.6",
-                        "2018-05-16T17:54:01Z",
-                        "Bala Parental Alienation Study: Canada, United "
-                        "Kingdom, and Australia 1984-2012 [test]",
                         "https://doi.org/10.5072/FK2/UNMEZF",
                         "web_ui_demo.dataverse.org.doi.10.5072.2.json")
-
 dv_3 = DataverseMDIndex("4.8.6",
-                        "2018-05-09T21:26:07Z",
-                        "A study with restricted data",
                         "https://doi.org/10.5072/FK2/WZTJWN",
                         "web_ui_demo.dataverse.org.doi.10.5072.3.json")
-
 dv_4 = DataverseMDIndex("4.8.6",
-                        "2018-05-09T20:33:36Z",
-                        "A study of my afternoon drinks ",
                         "https://doi.org/10.5072/FK2/6PPJ6Y",
                         "api_demo.dataverse.org.doi.10.5072.4.json")
-
-
 dv_5 = DataverseMDIndex("4.8.6",
-                        "2018-08-24T14:15:00Z",
-                        "Botanical Test",
                         "https://doi.org/10.5072/FK2/8KDUHM",
                         "api_demo.dataverse.org.doi.10.5072.5.json")
-
 dv_6 = DataverseMDIndex("4.8.6",
-                        "2018-08-24T14:15:00Z",
-                        "Botanical Test",
                         "https://hdl.handle.net/10864/11651",
                         "api_demo.dataverse.org.doi.10.5072.6.json")
-
 dv_7 = DataverseMDIndex("4.8.6",
-                        "2018-08-26T14:15:00Z",
-                        "A Stugo of my afternoon drinks",
                         "https://doi.org/10.5072/FK2/6PPJ6Y",
                         "api_demo.dataverse.org.doi.10.5072.7.json")
+dv_8 = DataverseMDIndex("4.8.6",
+                        "http://dx.doi.org/10.5072/FK2/NNTESQ",
+                        "api_demo.dataverse.org.doi.10.5072.8.json")
 
 
 class TestDataverseExample(object):
@@ -107,6 +88,8 @@ class TestDataverseExample(object):
           WRITE_DIR, "METS.{}.dataverse.xml".format(dv_6.fname)),
          (FIXTURES_DIR, dv_7.fname,
           WRITE_DIR, "METS.{}.dataverse.xml".format(dv_7.fname)),
+         (FIXTURES_DIR, dv_8.fname,
+          WRITE_DIR, "METS.{}.dataverse.xml".format(dv_8.fname)),
          ])
     def test_parse_dataverse(self,
                              fixture_path,
@@ -119,8 +102,8 @@ class TestDataverseExample(object):
         job = Job("stub", "stub", ["", ""])
         ret = convert_dataverse_structure.map_(
             job=job, unit_path=fixture_path, unit_uuid="",
-            dataset_md_name=fixture_name, md_path=mets_output_path,
-            md_name=mets_name)
+            dataset_md_name=fixture_name, output_md_path=mets_output_path,
+            output_md_name=mets_name)
 
         assert ret == 0, ("Creation of Dataverse METS failed with return "
                           "code {}".format(ret))
@@ -134,6 +117,7 @@ class TestDataverseExample(object):
          (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_5.fname), 11, 2, 9),
          (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_6.fname), 18, 3, 15),
          (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_7.fname), 10, 3, 7),
+         (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_8.fname), 10, 3, 7),
          ])
     def test_generated_mets(self,
                             mets_output_path,
@@ -141,6 +125,10 @@ class TestDataverseExample(object):
                             all_file_count,
                             dir_count,
                             item_count):
+        """Understand whether all the file and directory elements appear in the
+        METS as anticipated. A high-level test to quickly understand if
+        something has gone wrong while refactoring.
+        """
         mets_path = os.path.join(mets_output_path, mets_name)
         if not os.path.isfile(mets_path):
             pytest.fail("Fixtures were not previously setup correctly.")
@@ -168,32 +156,46 @@ class TestDataverseExample(object):
                                             .format(item_counter, item_count))
 
     @pytest.mark.parametrize(
-        "mets_output_path, mets_name, ddi_title, pid_type, pid_value",
-        [(WRITE_DIR, "METS.{}.dataverse.xml".format(dv_1.fname),
+        "dataset_name, mets_output_path, mets_name, ddi_title, pid_type, "
+        "pid_value, ddi_count",
+        [(dv_1.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_1.fname),
             "Test Dataset", "doi",
-            "http://dx.doi.org/10.5072/FK2/XSAZXH"),
-         (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_2.fname),
-            "Bala Parental Alienation Study: Canada, United Kingdom, and Australia 1984-2012 [test]", "doi", "https://doi.org/10.5072/FK2/UNMEZF"),
-         (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_3.fname),
-            "A study with restricted data", "doi", "https://doi.org/10.5072/FK2/WZTJWN"),
-         (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_4.fname),
-            "A study of my afternoon drinks", "doi", "https://doi.org/10.5072/FK2/6PPJ6Y"),
-         (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_5.fname),
-            "Botanical Test", "doi", "https://doi.org/10.5072/FK2/8KDUHM"),
-         (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_6.fname),
+            "http://dx.doi.org/10.5072/FK2/XSAZXH", 1),
+         (dv_2.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_2.fname),
+            "Bala Parental Alienation Study: Canada, United Kingdom, and "
+            "Australia 1984-2012 [test]", "doi",
+            "https://doi.org/10.5072/FK2/UNMEZF", 5),
+         (dv_3.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_3.fname),
+            "A study with restricted data", "doi",
+            "https://doi.org/10.5072/FK2/WZTJWN", 1),
+         (dv_4.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_4.fname),
+            "A study of my afternoon drinks", "doi",
+            "https://doi.org/10.5072/FK2/6PPJ6Y", 2),
+         (dv_5.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_5.fname),
+            "Botanical Test", "doi", "https://doi.org/10.5072/FK2/8KDUHM", 1),
+         (dv_6.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_6.fname),
             "Research Data Management (RDM) Survey of Queen's University's "
             "Engineering and Science Departments", "hdl",
-            "https://hdl.handle.net/10864/11651"),
-         (WRITE_DIR, "METS.{}.dataverse.xml".format(dv_7.fname),
+            "https://hdl.handle.net/10864/11651", 2),
+         (dv_7.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_7.fname),
             "A study of my afternoon drinks", "doi",
-            "https://doi.org/10.5072/FK2/6PPJ6Y"),
+            "https://doi.org/10.5072/FK2/6PPJ6Y", 2),
+         (dv_8.fname, WRITE_DIR, "METS.{}.dataverse.xml".format(dv_8.fname),
+            "Depress", "doi",
+            "https://doi.org/10.5072/FK2/NNTESQ", 2),
          ])
     def test_mets_content(self,
+                          dataset_name,
                           mets_output_path,
                           mets_name,
                           ddi_title,
                           pid_type,
-                          pid_value):
+                          pid_value,
+                          ddi_count):
+        """Cherry-pick certain important elements in the content of the
+        dataverse METS that needs to be consistently output by the convert
+        dataverse mets script.
+        """
         mets_path = os.path.join(mets_output_path, mets_name)
         if not os.path.isfile(mets_path):
             pytest.fail("Fixtures were not previously setup correctly.")
@@ -243,3 +245,19 @@ class TestDataverseExample(object):
                         entry.get("DMDID") is not None:
                     assert entry.get("LABEL") == ddi_title, \
                         ("Title not found in METS struct maps where expected")
+
+        # Finally, the metadata should contain two mdrefs at this point. Look
+        # for them here.
+        refs = mets_root.findall('.//{http://www.loc.gov/METS/}mdRef')
+        assert len(refs) > 0 and len(refs) <= ddi_count
+
+        # Assert that at least one mdref points to our dataset.json file and
+        # that if we find any other mdrefs that they point to ddi files.
+        dataset_json = False
+        for ref in refs:
+            if ref.get("LABEL") == dataset_name:
+                dataset_json = True
+            elif ref.get("MDTYPE") != "DDI":
+                pytest.fail("Unexpected MDREF found in metadata: {}"
+                            .format(ref.get("LABEL")))
+        assert dataset_json is True
