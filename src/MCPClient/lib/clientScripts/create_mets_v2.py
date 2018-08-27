@@ -922,8 +922,9 @@ def createFileSec(job,
             # Special Dataverse processing. If there's .tab file, check if
             # there's a Dataverse METS with additional metadata.
             if f.originallocation.endswith('.tab'):
-                dv_metadata = create_dataverse_tabfile_dmdsec(job,
-                    baseDirectoryPath, os.path.basename(f.originallocation))
+                dv_metadata = create_dataverse_tabfile_dmdsec(
+                    job, baseDirectoryPath,
+                    os.path.basename(f.originallocation))
                 globalState.dmdSecs.extend(dv_metadata)
                 ids = ' '.join([ds.get('ID') for ds in dv_metadata])
                 fileDiv.attrib['DMDID'] = fileDiv.attrib.get('DMDID', '') \
