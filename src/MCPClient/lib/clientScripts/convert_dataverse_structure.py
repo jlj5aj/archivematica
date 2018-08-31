@@ -20,6 +20,7 @@ logger = get_script_logger("archivematica.mcp.client.convert_dataverse_struct")
 
 THIS_DIR = os.path.abspath(os.path.dirname(__file__))
 
+
 # Mapping from originalFormatLabel in dataset.json to file extension. The
 # values here are associated with Dataverse Bundles, created when Tabular data
 # is ingested, see: http://guides.dataverse.org/en/latest/user/dataset-management.html?highlight=bundle
@@ -56,32 +57,48 @@ def get_ddi_title_author(dataset_md_latest):
 def create_ddi(job, json_metadata):
     """Create the DDI dmdSec from the JSON metadata."""
     dataset_md_latest = get_latest_version_metadata(json_metadata)
+
+    ddi_elems = {
+        "Title": "",
+        "Author": "",
+        "PID Type": "",
+        "IDNO": "",
+        "Version Date": "",
+        "Version Type": "",
+        "Version Number": "",
+        "Restriction Text": "",
+        "Distributor Text": ""}
+
     try:
-        title_text, author_text = get_ddi_title_author(dataset_md_latest)
+        ddi_elems["Title"], \
+            ddi_elems["Author"] = get_ddi_title_author(dataset_md_latest)
     except TypeError as e:
         logger.error("Unable to gather citation data from dataset.json: %s", e)
         return None
 
-    agency = json_metadata.get("protocol")
-    idno = json_metadata.get("persistentUrl")
-    version_date = dataset_md_latest.get("releaseTime")
-    version_type = dataset_md_latest.get("versionState")
-    version_num = "{}.{}".format(
-        dataset_md_latest.get("versionNumber"),
-        dataset_md_latest.get("versionMinorNumber")
+    ddi_elems["PID Type"] = json_metadata.get("protocol", "")
+    ddi_elems["IDNO"] = json_metadata.get("persistentUrl", "")
+    ddi_elems["Version Date"] = dataset_md_latest.get("releaseTime", "")
+    ddi_elems["Version Type"] = dataset_md_latest.get("versionState", "")
+    ddi_elems["Version Number"] = "{}.{}".format(
+        dataset_md_latest.get("versionNumber", ""),
+        dataset_md_latest.get("versionMinorNumber", "")
     )
-    restriction_text = dataset_md_latest.get("termsOfUse")
-    distributor_text = json_metadata.get("publisher")
+    ddi_elems["Restriction Text"] = dataset_md_latest.get("termsOfUse", "")
+    ddi_elems["Distributor Text"] = json_metadata.get("publisher", "")
 
-    fields_log = (
-        "Fields retrieved from Dataverse:\nTitle: {}\nAuthor: {}\n"
-        "PID Type: {}\nIDNO: {}\nVersion Date: {}\nVersion Type: {}\n"
-        "Version Number: {}\nRestriction Text: {}\nDistributor Text: {}\n"
-        .format(
-            title_text, author_text, agency, idno, version_date, version_type,
-            version_num, restriction_text, distributor_text))
+    draft = False
+    job.pyprint("Fields retrieved from Dataverse:")
+    for ddi_k, ddi_v in ddi_elems.iteritems():
+        if ddi_k == "Version Type" and ddi_v == "DRAFT":
+            draft = True
+        job.pyprint("{}: {}".format(ddi_k, ddi_v))
 
-    job.pyprint(fields_log)
+    if draft:
+        job.pyprint(
+            "Dataset is in a DRAFT state and may not transfer correctly")
+        logger.error(
+            "Dataset is in a DRAFT state and may not transfer correctly")
 
     # create XML
     nsmap = {"ddi": "http://www.icpsr.umich.edu/DDI"}
@@ -100,23 +117,31 @@ def create_ddi(job, json_metadata):
     citation = etree.SubElement(stdydscr, ddins + "citation", nsmap=nsmap)
 
     titlstmt = etree.SubElement(citation, ddins + "titlStmt", nsmap=nsmap)
-    etree.SubElement(titlstmt, ddins + "titl", nsmap=nsmap).text = title_text
-    etree.SubElement(titlstmt, ddins + "IDNo", agency=agency).text = idno
+    etree.SubElement(titlstmt, ddins + "titl", nsmap=nsmap).text \
+        = ddi_elems["Title"]
+
+    etree.SubElement(
+        titlstmt, ddins + "IDNo", agency=ddi_elems["PID Type"]).text \
+        = ddi_elems["IDNO"]
 
     rspstmt = etree.SubElement(citation, ddins + "rspStmt")
-    etree.SubElement(rspstmt, ddins + "AuthEnty").text = author_text
+    etree.SubElement(rspstmt, ddins + "AuthEnty").text \
+        = ddi_elems["Author"]
 
     diststmt = etree.SubElement(citation, ddins + "distStmt")
-    etree.SubElement(diststmt, ddins + "distrbtr").text = distributor_text
+    etree.SubElement(diststmt, ddins + "distrbtr").text \
+        = ddi_elems["Distributor Text"]
 
     verstmt = etree.SubElement(citation, ddins + "verStmt")
     etree.SubElement(
-        verstmt, ddins + "version", date=version_date, type=version_type
-    ).text = version_num
+        verstmt, ddins + "version", date=ddi_elems["Version Date"],
+        type=ddi_elems["Version Type"]
+    ).text = ddi_elems["Version Number"]
 
     dataaccs = etree.SubElement(stdydscr, ddins + "dataAccs")
     usestmt = etree.SubElement(dataaccs, ddins + "useStmt")
-    etree.SubElement(usestmt, ddins + "restrctn").text = restriction_text
+    etree.SubElement(usestmt, ddins + "restrctn").text \
+        = ddi_elems["Restriction Text"]
 
     return ddi_root
 
