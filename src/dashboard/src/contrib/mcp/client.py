@@ -141,7 +141,7 @@ class MCPClient(object):
             "sipuuid": unit_id,
         }
         if mscl_id is not None:
-            kwargs["microservicechainlink_id"] = mscl_id
+            kwargs["microservicechainlink"] = mscl_id
         jobs = Job.objects.filter(**kwargs)
         if len(jobs) < 1:
             raise NoJobFoundError()

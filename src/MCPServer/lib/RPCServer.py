@@ -372,13 +372,12 @@ class RPCServer(GearmanWorker):
             # Append jobs
             for job_ in jobs:
                 try:
-                    link = self.workflow.get_link(
-                        job_.microservicechainlink.id)
+                    link = self.workflow.get_link(job_.microservicechainlink)
                 except KeyError:
                     continue
                 new_job = {}
                 new_job["uuid"] = job_.jobuuid
-                new_job["link_id"] = job_.microservicechainlink.pk
+                new_job["link_id"] = job_.microservicechainlink
                 new_job["currentstep"] = job_.currentstep
                 new_job["timestamp"] = "%d.%s" % (
                     calendar.timegm(job_.createdtime.timetuple()),
