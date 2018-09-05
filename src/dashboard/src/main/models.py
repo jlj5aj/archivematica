@@ -22,6 +22,7 @@
 # stdlib, alphabetical by import source
 import ast
 import logging
+import re
 
 # Core Django, alphabetical by import source
 from django import forms
@@ -555,6 +556,22 @@ class Job(models.Model):
 
     class Meta:
         db_table = u'Jobs'
+
+    def get_directory_name(self, default=None):
+        if not self.directory:
+            return self.sipuuid
+        try:
+            return re.search(
+                r'^.*/(?P<directory>.*)-'
+                r'[\w]{8}(-[\w]{4})'
+                r'{3}-[\w]{12}[/]{0,1}$', self.directory).group('directory')
+        except Exception:
+            pass
+        try:
+            return re.search(
+                r'^.*/(?P<directory>.*)/$', self.directory).group('directory')
+        except Exception:
+            pass
 
 
 class Task(models.Model):

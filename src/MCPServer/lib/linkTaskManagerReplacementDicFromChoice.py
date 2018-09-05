@@ -33,6 +33,7 @@ from linkTaskManagerChoice import choicesAvailableForUnits, choicesAvailableForU
 from dicts import ReplacementDict
 from main.models import DashboardSetting, Job, UserProfile
 from django.conf import settings as django_settings
+from django.utils.six import text_type
 
 LOGGER = logging.getLogger('archivematica.mcp.server')
 
@@ -68,10 +69,17 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
             choicesAvailableForUnits[self.jobChainLink.UUID] = self
             choicesAvailableForUnitsLock.release()
 
+    def _format_items(self, items):
+        """Wrap replacement items with the ``%`` wildcard character."""
+        return {'%{}%'.format(key): value
+                for key, value in items.items()}
+
     def _populate_choices(self):
         self.choices = []
-        for i, item in enumerate(self.replacements):
-            self.choices.append((i, item["description"]["en"], item["items"]))
+        for index, item in enumerate(self.replacements):
+            self.choices.append((
+                index, item["description"],
+                self._format_items(item["items"])))
 
     def _get_dashboard_setting_choice(self):
         try:
@@ -121,9 +129,7 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
                                 # In our JSON-encoded document, the items in
                                 # the replacements are not wrapped, do it here.
                                 # Needed by ReplacementDict.
-                                ret = {'%{}%'.format(key): value
-                                       for key, value in
-                                       replacement["items"].items()}
+                                ret = self._format_items(replacement["items"])
                                 break
                         else:
                             return
@@ -174,10 +180,10 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
         etree.SubElement(ret, "UUID").text = self.jobChainLink.UUID
         ret.append(self.unit.xmlify())
         choices = etree.SubElement(ret, "choices")
-        for chainAvailable, description, rd in self.choices:
+        for index, description, __ in self.choices:
             choice = etree.SubElement(choices, "choice")
-            etree.SubElement(choice, "chainAvailable").text = chainAvailable.__str__()
-            etree.SubElement(choice, "description").text = description
+            etree.SubElement(choice, "chainAvailable").text = text_type(index)
+            etree.SubElement(choice, "description").text = text_type(description)
         return ret
 
     def proceedWithChoice(self, index, user_id):
@@ -191,6 +197,6 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
         choicesAvailableForUnitsLock.release()
 
         # get the one at index, and go with it.
-        choiceIndex, description, items = self.choices[int(index)]
+        __, __, items = self.choices[int(index)]
         self.update_passvar_replacement_dict(ReplacementDict(items))
         self.jobChainLink.linkProcessingComplete(0, passVar=self.jobChainLink.passVar)
