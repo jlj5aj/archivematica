@@ -31,49 +31,34 @@ from linkTaskManager import LinkTaskManager
 from linkTaskManagerChoice import choicesAvailableForUnits, choicesAvailableForUnitsLock, waitingOnTimer
 
 from dicts import ReplacementDict
-from main.models import DashboardSetting, Job, MicroServiceChainLink, MicroServiceChoiceReplacementDic, StandardTaskConfig, UserProfile
+from main.models import DashboardSetting, Job, UserProfile
 from django.conf import settings as django_settings
 
 LOGGER = logging.getLogger('archivematica.mcp.server')
 
 
 class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
-    def __init__(self, jobChainLink, pk, unit):
-        super(linkTaskManagerReplacementDicFromChoice, self).__init__(jobChainLink, pk, unit)
+    def __init__(self, jobChainLink, unit):
+        super(linkTaskManagerReplacementDicFromChoice, self).__init__(
+            jobChainLink, unit)
 
-        self.choices = []
-        dicts = MicroServiceChoiceReplacementDic.objects.filter(choiceavailableatlink=str(jobChainLink.pk))
-        for i, dic in enumerate(dicts):
-            self.choices.append((i, dic.description, dic.replacementdic))
+        self.replacements = self.jobChainLink.link.config["replacements"]
+        self._populate_choices()
 
-        # This is an attempt to find a choice in DashboardSettings for the
-        # chain link that the current MicroServiceChoiceReplacementDic is
-        # taking us. We're looking up the setting dict by the module name
-        # that the StandardTaskConfig wants to execute, e.g. upload-qubit_v0.0.
-        #
-        # Not implemented yet, but this could enable us to store more than a
-        # configuration set a specific chain link.
-        #
-        # DashboardSettings does not belong to MCPServer. We currently have
-        # direct access to the database but that may not be always possible.
-        try:
-            mscl = MicroServiceChainLink.objects.get(id=jobChainLink.pk)
-            task_id = mscl.defaultnextchainlink.currenttask.tasktypepkreference
-            stc = StandardTaskConfig.objects.get(id=task_id)
-        except (MicroServiceChainLink.DoesNotExist, StandardTaskConfig.DoesNotExist, AttributeError):
-            pass
-        else:
-            args = DashboardSetting.objects.get_dict(stc.execute)
-            if args:
-                args = {'%{}%'.format(key): value for key, value in args.items()}
-                self.choices.append((len(self.choices), stc.execute, str(args)))
+        args = self._get_dashboard_setting_choice()
+        if args:
+            self.update_passvar_replacement_dict(args)
+            self.jobChainLink.linkProcessingComplete(
+                0, passVar=self.jobChainLink.passVar)
+            return
 
         preConfiguredChain = self.checkForPreconfiguredXML()
         if preConfiguredChain is not None:
             if preConfiguredChain != waitingOnTimer:
                 self.jobChainLink.setExitMessage(Job.STATUS_COMPLETED_SUCCESSFULLY)
-                rd = ReplacementDict.fromstring(preConfiguredChain)
+                rd = ReplacementDict(preConfiguredChain)
                 self.update_passvar_replacement_dict(rd)
+                print(self.jobChainLink, rd)
                 self.jobChainLink.linkProcessingComplete(0, passVar=self.jobChainLink.passVar)
             else:
                 LOGGER.info('Waiting on delay to resume processing on unit %s', unit)
@@ -82,6 +67,26 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
             self.jobChainLink.setExitMessage(Job.STATUS_AWAITING_DECISION)
             choicesAvailableForUnits[self.jobChainLink.UUID] = self
             choicesAvailableForUnitsLock.release()
+
+    def _populate_choices(self):
+        self.choices = []
+        for i, item in enumerate(self.replacements):
+            self.choices.append((i, item["description"]["en"], item["items"]))
+
+    def _get_dashboard_setting_choice(self):
+        try:
+            link = self.jobChainLink.workflow.get_link(
+                self.jobChainLink.link.config["fallback_link_id"])
+        except KeyError:
+            return
+        execute = link.config["execute"]
+        if not execute:
+            return
+        args = DashboardSetting.objects.get_dict(execute)
+        if not args:
+            return
+        return ReplacementDict(
+            {'%{}%'.format(key): value for key, value in args.items()})
 
     def checkForPreconfiguredXML(self):
         ret = None
@@ -105,10 +110,24 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
                         desiredChoice = preconfiguredChoice.find("goToChain").text
                         desiredChoice = choice_unifier.get(
                             desiredChoice, desiredChoice)
-                        dic = MicroServiceChoiceReplacementDic.objects.get(
-                            id=desiredChoice,
-                            choiceavailableatlink=this_choice_point)
-                        ret = dic.replacementdic
+
+                        try:
+                            link = self.jobChainLink.workflow.get_link(
+                                this_choice_point)
+                        except KeyError:
+                            return
+                        for replacement in link.config["replacements"]:
+                            if replacement["id"] == desiredChoice:
+                                # In our JSON-encoded document, the items in
+                                # the replacements are not wrapped, do it here.
+                                # Needed by ReplacementDict.
+                                ret = {'%{}%'.format(key): value
+                                       for key, value in
+                                       replacement["items"].items()}
+                                break
+                        else:
+                            return
+
                         try:
                             # <delay unitAtime="yes">30</delay>
                             delayXML = preconfiguredChoice.find("delay")
@@ -127,7 +146,7 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
                                 timeToGo = delaySeconds - timeDifference
                                 LOGGER.info('Time to go: %s', timeToGo)
                                 self.jobChainLink.setExitMessage("Waiting till: " + datetime.datetime.fromtimestamp((nowTime + timeToGo)).ctime())
-                                rd = ReplacementDict.fromstring(ret)
+                                rd = ReplacementDict(ret)
                                 if self.jobChainLink.passVar is not None:
                                     if isinstance(self.jobChainLink.passVar, ReplacementDict):
                                         new = {}
@@ -159,7 +178,6 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
             choice = etree.SubElement(choices, "choice")
             etree.SubElement(choice, "chainAvailable").text = chainAvailable.__str__()
             etree.SubElement(choice, "description").text = description
-
         return ret
 
     def proceedWithChoice(self, index, user_id):
@@ -173,7 +191,6 @@ class linkTaskManagerReplacementDicFromChoice(LinkTaskManager):
         choicesAvailableForUnitsLock.release()
 
         # get the one at index, and go with it.
-        choiceIndex, description, replacementDic2 = self.choices[int(index)]
-        rd = ReplacementDict.fromstring(replacementDic2)
-        self.update_passvar_replacement_dict(rd)
+        choiceIndex, description, items = self.choices[int(index)]
+        self.update_passvar_replacement_dict(ReplacementDict(items))
         self.jobChainLink.linkProcessingComplete(0, passVar=self.jobChainLink.passVar)
