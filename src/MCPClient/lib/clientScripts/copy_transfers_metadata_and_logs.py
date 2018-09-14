@@ -33,6 +33,15 @@ django.setup()
 from main.models import File, SIP
 
 
+IGNORED_TRANSFER_METADATA_ITEMS = ('dc.json', 'submissionDocumentation')
+
+
+def _list_transfer_metadata_dir(path):
+    for fname in os.listdir(path):
+        if fname not in IGNORED_TRANSFER_METADATA_ITEMS:
+            yield fname
+
+
 def main(job, sipUUID, transfersMetadataDirectory, transfersLogsDirectory, sharedPath=""):
     if not os.path.exists(transfersMetadataDirectory):
         os.makedirs(transfersMetadataDirectory)
@@ -60,9 +69,7 @@ def main(job, sipUUID, transfersMetadataDirectory, transfersLogsDirectory, share
                 transferMetadataDirectory = os.path.join(transferPath, "metadata")
             if not os.path.exists(transferMetadataDirectory):
                 continue
-            for met in os.listdir(transferMetadataDirectory):
-                if met == "submissionDocumentation":
-                    continue
+            for met in _list_transfer_metadata_dir(transferMetadataDirectory):
                 src = os.path.join(transferMetadataDirectory, met)
                 dst = os.path.join(transferMetaDestDir, met)
                 if os.path.isdir(src):
