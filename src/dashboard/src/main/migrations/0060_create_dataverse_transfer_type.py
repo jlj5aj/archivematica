@@ -239,7 +239,7 @@ def create_parse_dataverse_mets_microservice(apps):
     # Pointer to the parse Dataverse client script.
     create_standard_task_config(
         apps=apps, task_uuid="58988b82-7b65-40f3-94a7-f2f3e13b8700",
-        execute_string="parseDataverse",
+        execute_string="parseDataverse_v0.0",
         args="%SIPDirectory% %SIPUUID%")
 
     # e593507e (Parse Dataverse METS XML) task to be associated with a
@@ -310,7 +310,7 @@ def create_dataverse_unit_variables_and_initial_tasks(apps):
     create_standard_task_config(
         apps=apps, task_uuid="286b4b17-d382-48eb-bdbe-ca3b2a32568b",
         execute_string="convertDataverseStructure_v0.0",
-        args="%SIPDirectory% %SIPUUID%")
+        args="%SIPDirectory%")
 
     # ab6c6e52 (Convert Dataverse Structure) task to be associated with a
     # MicroServiceChainLink.

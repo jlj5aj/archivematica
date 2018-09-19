@@ -59,7 +59,7 @@ TRANSFER_TYPE_DIRECTORIES = {
     'dspace': 'Dspace',
     'maildir': 'maildir',
     'TRIM': 'TRIM',
-    'dataverse': 'dataverseTransfer'
+    'dataverse': 'dataverseTransfer',
 }
 
 

@@ -1,6 +1,19 @@
 #!/usr/bin/env python2
 # -*- coding: utf-8 -*-
 
+"""Given a transfer type Dataverse access the metadata submission object
+```dataset.json``` to generate a transfer METS.xml file.
+
+The METS.xml will reflect various properties of the ```dataset.json``` file. An
+example of a specific feature of Dataverse is the existence of Bundle objects
+for Tabular data. Bundles contain derivatives of a tabular data file that are
+created by Dataverse to enable the data to be interacted with using as wide a
+range of tools as possible. These Derivatives are transcribed to the METS.xml.
+
+More information about Dataverse in Archivematica can be found here:
+https://wiki.archivematica.org/Dataverse
+"""
+
 import json
 import os
 import uuid
@@ -18,7 +31,8 @@ import metsrw
 logger = get_script_logger("archivematica.mcp.client.convert_dataverse_struct")
 
 
-THIS_DIR = os.path.abspath(os.path.dirname(__file__))
+class ConvertDataverseError(Exception):
+    pass
 
 
 # Mapping from originalFormatLabel in dataset.json to file extension. The
@@ -44,36 +58,32 @@ def get_ddi_title_author(dataset_md_latest):
     """
     title_text = author_text = None
     citation = dataset_md_latest.get("metadataBlocks", {}).get("citation")
-    if citation:
-        for field in citation.get("fields"):
+    fields = citation.get("fields", None)
+    if fields:
+        for field in fields:
             if field.get("typeName") == "title":
                 title_text = field.get("value")
             if field.get("typeName") == "author":
                 author_text = field.get("value")[0].get("authorName")\
                     .get("value")
         return title_text.strip(), author_text.strip()
+    raise ConvertDataverseError(
+        "Unable to retrieve MD fields from dataset.json")
 
 
-def create_ddi(job, json_metadata):
+def create_ddi(job, json_metadata, dataset_md_latest):
     """Create the DDI dmdSec from the JSON metadata."""
-    dataset_md_latest = get_latest_version_metadata(json_metadata)
-
-    ddi_elems = {
-        "Title": "",
-        "Author": "",
-        "PID Type": "",
-        "IDNO": "",
-        "Version Date": "",
-        "Version Type": "",
-        "Version Number": "",
-        "Restriction Text": "",
-        "Distributor Text": ""}
+    ddi_elems = {}
 
     try:
         ddi_elems["Title"], \
             ddi_elems["Author"] = get_ddi_title_author(dataset_md_latest)
-    except TypeError as e:
-        logger.error("Unable to gather citation data from dataset.json: %s", e)
+    except TypeError as err:
+        logger.error(
+            "Unable to gather citation data from dataset.json: %s", err)
+        return None
+    except ConvertDataverseError as err:
+        logger.error(err)
         return None
 
     ddi_elems["PID Type"] = json_metadata.get("protocol", "")
@@ -100,7 +110,7 @@ def create_ddi(job, json_metadata):
         logger.error(
             "Dataset is in a DRAFT state and may not transfer correctly")
 
-    # create XML
+    # Create XML.
     nsmap = {"ddi": "http://www.icpsr.umich.edu/DDI"}
     ddins = "{" + nsmap["ddi"] + "}"
     ddi_root = etree.Element(ddins + "codebook", nsmap=nsmap)
@@ -156,107 +166,116 @@ def display_checksum_for_user(job, checksum_value, checksum_type="MD5"):
 
 
 def create_bundle(job, tabfile_json):
-    """
-    Creates and returns the metsrw entries for a tabfile's bundle
+    """Create the FSEntry objects for the various files in a Dataverse bundle
+    identified initially by a ```.tab``` file being requested from the
+    Dataverse API.
+
+    A bundle is a collection of multiple representations of a tabular data
+    file. Bundles are created by Dataverse to allow interaction with as wide a
+    range of tools as possible.
+
+    Documentation on Bundles can be found on the Dataverse pages:
+
+       * http://guides.dataverse.org/en/latest/user/dataset-management.html?highlight=bundle
     """
     # Base name is .tab with suffix stripped
     tabfile_name = tabfile_json.get("label")
-    if tabfile_name is not None:
-        job.pyprint("Creating entries for tabfile bundle {}"
-                    .format(tabfile_name))
-        base_name = tabfile_name[:-4]
-        bundle = metsrw.FSEntry(path=base_name, type="Directory")
-        # Find the original file and add it to the METS FS Entries.
-        tabfile_datafile = tabfile_json.get("dataFile")
-        fname = None
-        ext = EXTENSION_MAPPING.get(
-            tabfile_datafile.get("originalFormatLabel", ""), "UNKNOWN")
-        logger.info("Retrieved extension mapping value: %s", ext)
-        logger.info(
-            "Original file format listed as %s", tabfile_datafile.get("originalFileFormat", "None"))
-        if ext == "UNKNOWN":
-            fname = tabfile_datafile.get("filename")
-            logger.info(
-                "Original Format Label is UNKNOWN, using filename: %s",
-                fname)
-        if fname is None:
-            fname = "{}{}".format(base_name, ext)
-        checksum_value = tabfile_datafile.get("md5")
-        if checksum_value is None:
-            return None
-        display_checksum_for_user(job, checksum_value)
-        original_file = metsrw.FSEntry(
-            path="{}/{}".format(base_name, fname),
-            use="original",
-            file_uuid=str(uuid.uuid4()),
-            checksumtype="MD5",
-            checksum=checksum_value,
-        )
-        bundle.add_child(original_file)
-        if tabfile_datafile.get("originalFormatLabel") != "R Data":
-            # RData derivative
-            f = metsrw.FSEntry(
-                path="{}/{}.RData".format(base_name, base_name),
-                use="derivative",
-                derived_from=original_file,
-                file_uuid=str(uuid.uuid4()),
-            )
-            bundle.add_child(f)
+    if tabfile_name is None:
+        return None
 
-        # Add expected bundle contents
-        # FIXME what is the actual path for the files?
-        # Tabfile
+    # Else, continue processing.
+    job.pyprint("Creating entries for tabfile bundle {}"
+                .format(tabfile_name))
+    base_name = tabfile_name[:-4]
+    bundle = metsrw.FSEntry(path=base_name, type="Directory")
+    # Find the original file and add it to the METS FS Entries.
+    tabfile_datafile = tabfile_json.get("dataFile")
+    fname = None
+    ext = EXTENSION_MAPPING.get(
+        tabfile_datafile.get("originalFormatLabel", ""), "UNKNOWN")
+    logger.info("Retrieved extension mapping value: %s", ext)
+    logger.info(
+        "Original file format listed as %s",
+        tabfile_datafile.get("originalFileFormat", "None"))
+    if ext == "UNKNOWN":
+        fname = tabfile_datafile.get("filename")
+        logger.info(
+            "Original Format Label is UNKNOWN, using filename: %s",
+            fname)
+    if fname is None:
+        fname = "{}{}".format(base_name, ext)
+    checksum_value = tabfile_datafile.get("md5")
+    if checksum_value is None:
+        return None
+    display_checksum_for_user(job, checksum_value)
+    original_file = metsrw.FSEntry(
+        path="{}/{}".format(base_name, fname),
+        use="original",
+        file_uuid=str(uuid.uuid4()),
+        checksumtype="MD5",
+        checksum=checksum_value,
+    )
+    bundle.add_child(original_file)
+    if tabfile_datafile.get("originalFormatLabel") != "R Data":
+        # RData derivative
         f = metsrw.FSEntry(
-            path="{}/{}".format(base_name, tabfile_datafile.get("filename")),
+            path="{}/{}.RData".format(base_name, base_name),
             use="derivative",
             derived_from=original_file,
             file_uuid=str(uuid.uuid4()),
         )
-        f.add_dmdsec(
-            md="{}/{}-ddi.xml".format(base_name, base_name),
-            mdtype="DDI",
-            mode="mdref",
-            label="{}-ddi.xml".format(base_name),
-            loctype="OTHER",
-            otherloctype="SYSTEM",
-        )
         bundle.add_child(f)
-        # -ddi.xml
-        f = metsrw.FSEntry(
-            path="{}/{}-ddi.xml".format(base_name, base_name),
-            use="metadata",
-            derived_from=original_file,
-            file_uuid=str(uuid.uuid4()),
-        )
-        bundle.add_child(f)
-        # citation - endnote
-        f = metsrw.FSEntry(
-            path="{}/{}citation-endnote.xml".format(base_name, base_name),
-            use="metadata",
-            derived_from=original_file,
-            file_uuid=str(uuid.uuid4()),
-        )
-        bundle.add_child(f)
-        # citation - ris
-        f = metsrw.FSEntry(
-            path="{}/{}citation-ris.ris".format(base_name, base_name),
-            use="metadata",
-            derived_from=original_file,
-            file_uuid=str(uuid.uuid4()),
-        )
-        bundle.add_child(f)
-        return bundle
+
+    # Add expected bundle contents
+    # FIXME what is the actual path for the files?
+    # Tabfile
+    f = metsrw.FSEntry(
+        path="{}/{}".format(base_name, tabfile_datafile.get("filename")),
+        use="derivative",
+        derived_from=original_file,
+        file_uuid=str(uuid.uuid4()),
+    )
+    f.add_dmdsec(
+        md="{}/{}-ddi.xml".format(base_name, base_name),
+        mdtype="DDI",
+        mode="mdref",
+        label="{}-ddi.xml".format(base_name),
+        loctype="OTHER",
+        otherloctype="SYSTEM",
+    )
+    bundle.add_child(f)
+    # -ddi.xml
+    f = metsrw.FSEntry(
+        path="{}/{}-ddi.xml".format(base_name, base_name),
+        use="metadata",
+        derived_from=original_file,
+        file_uuid=str(uuid.uuid4()),
+    )
+    bundle.add_child(f)
+    # citation - endnote
+    f = metsrw.FSEntry(
+        path="{}/{}citation-endnote.xml".format(base_name, base_name),
+        use="metadata",
+        derived_from=original_file,
+        file_uuid=str(uuid.uuid4()),
+    )
+    bundle.add_child(f)
+    # citation - ris
+    f = metsrw.FSEntry(
+        path="{}/{}citation-ris.ris".format(base_name, base_name),
+        use="metadata",
+        derived_from=original_file,
+        file_uuid=str(uuid.uuid4()),
+    )
+    bundle.add_child(f)
+    return bundle
 
 
-def test_access(latest_version_md):
+def retrieve_terms_of_access(dataset_md_latest):
     """Return a tuple that can be used to direct users to information about a
     dataset if it is restricted.
     """
-    restricted_access = False
-    contact_information = latest_version_md.get("termsOfAccess")
-    if contact_information == "Please contact owner for access":
-        restricted_access = True
-    return restricted_access, contact_information
+    return dataset_md_latest.get("termsOfAccess")
 
 
 def test_if_zip_in_name(fname):
@@ -270,10 +289,10 @@ def test_if_zip_in_name(fname):
     return False
 
 
-def add_ddi_xml(job, sip, json_metadata):
+def add_ddi_xml(job, sip, json_metadata, dataset_md_latest):
     """Create a DDI XML data block and add this to the METS."""
-    ddi_root = create_ddi(job, json_metadata)
-    if create_ddi is None:
+    ddi_root = create_ddi(job, json_metadata, dataset_md_latest)
+    if ddi_root is None:
         return None
     sip.add_dmdsec(md=ddi_root, mdtype="DDI")
     return sip
@@ -306,10 +325,9 @@ def add_md_dir_to_structmap(sip):
     return sip
 
 
-def add_dataset_files_to_md(job, sip, latest_version_md, contact_information):
+def add_dataset_files_to_md(job, sip, dataset_md_latest, contact_information):
     # Add original files to the METS document.
-    files = {}
-    files = latest_version_md.get('files')
+    files = dataset_md_latest.get('files')
     if not files:
         return None
 
@@ -328,7 +346,9 @@ def add_dataset_files_to_md(job, sip, latest_version_md, contact_information):
             logger.error(
                 "Restricted dataset files may not have transferred "
                 "correctly: %s", contact_information)
-        if file_json.get("dataFile").get("filename").endswith(".tab"):
+
+        data_file = file_json.get("dataFile", {})
+        if data_file.get("filename", "").endswith(".tab"):
             # A Tabular Data File from Dataverse will consist of an original
             # tabular format submitted by the researcher plus multiple
             # different representations. We need to map that here.
@@ -342,9 +362,8 @@ def add_dataset_files_to_md(job, sip, latest_version_md, contact_information):
                 return None
         else:
             path_ = None
-            datafile = file_json.get("dataFile")
-            if datafile:
-                path_ = datafile.get("filename")
+            if data_file:
+                path_ = data_file.get("filename")
             if path_:
                 if test_if_zip_in_name(path_):
                     # provide some additional logging around the contents of the
@@ -353,7 +372,7 @@ def add_dataset_files_to_md(job, sip, latest_version_md, contact_information):
                         zipped_file = True
                         logger.info(
                             "Non-bundle .zip file found in the dataset.")
-                checksum_value = file_json.get("dataFile").get("md5")
+                checksum_value = data_file.get("md5")
                 if checksum_value is None:
                     return None
                 display_checksum_for_user(job, checksum_value)
@@ -368,7 +387,7 @@ def add_dataset_files_to_md(job, sip, latest_version_md, contact_information):
             else:
                 logger.error(
                     "Problem retrieving filename from metadata, returned "
-                    "datafile: %s, path: %s", datafile, path_)
+                    "datafile: %s, path: %s", data_file, path_)
                 return None
     return sip
 
@@ -392,10 +411,10 @@ def write_mets_to_file(sip, unit_path, output_md_path, output_md_name):
     # package.
     mets_f = metsrw.METSDocument()
     mets_f.append_file(sip)
-    tree = etree.fromstring(mets_f.tostring())
     with open(mets_path, 'w') as xml_file:
         xml_file.write(etree.tostring(
-            tree, pretty_print=True, encoding="utf-8", xml_declaration=True))
+            mets_f.serialize(), pretty_print=True, encoding="utf-8",
+            xml_declaration=True))
 
 
 def load_md_and_return_json(unit_path, dataset_md_name):
@@ -410,50 +429,59 @@ def load_md_and_return_json(unit_path, dataset_md_name):
         return None
 
 
-def map_(job, unit_path, unit_uuid, dataset_md_name="dataset.json",
-         output_md_path=None, output_md_name=None):
-    """Docstring..."""
+def convert_dataverse_to_mets(
+        job, unit_path, dataset_md_name="dataset.json", output_md_path=None,
+        output_md_name=None):
+    """Create a transfer METS file from a Dataverse's dataset.json file"""
     logger.info(
-        "Convert Dataverse structure called with '%s' unit directory and "
-        "'%s' unit uuid", unit_path, unit_uuid)
+        "Convert Dataverse structure called with '%s' unit directory",
+        unit_path)
 
     json_metadata = load_md_and_return_json(unit_path, dataset_md_name)
     if json_metadata is None:
         return 1
-    latest_version_md = get_latest_version_metadata(json_metadata)
-    if latest_version_md is None:
-        return 1
+    dataset_md_latest = get_latest_version_metadata(json_metadata)
+    if dataset_md_latest is None:
+        raise ConvertDataverseError(
+            "Unable to find the dataset metadata section from dataset.json")
 
     # If a dataset is restricted we may not have access to all the files. We
     # may also want to flag this dataset to the users of this service. We
     # can do this here and below. We do not yet know whether this microservice
     # should fail because we don't know how all datasets behave when some
     # restrictions are placed on them.
-    restricted_access, contact_information = test_access(latest_version_md)
+    contact_information = retrieve_terms_of_access(dataset_md_latest)
 
     # Create METS
-    sip = metsrw.FSEntry(
-        path="None", label=get_ddi_title_author(latest_version_md)[0],
-        use=None, type="Directory"
-    )
+    try:
+        sip = metsrw.FSEntry(
+            path="None", label=get_ddi_title_author(dataset_md_latest)[0],
+            use=None, type="Directory"
+        )
+    except TypeError as err:
+        citation_msg = (
+            "Unable to gather citation data from dataset.json: %s", err)
+        logger.error(citation_msg)
+        raise ConvertDataverseError(citation_msg)
+    except ConvertDataverseError as err:
+        raise
 
-    sip = add_ddi_xml(job, sip, json_metadata)
+    sip = add_ddi_xml(job, sip, json_metadata, dataset_md_latest)
     if sip is None:
-        return 1
+        raise ConvertDataverseError("Error creating SIP from Dataverse DDI")
 
     sip = add_metadata_ref(
         sip, dataset_md_name, "metadata/{}".format(dataset_md_name))
 
     sip = add_dataset_files_to_md(
-        job, sip, latest_version_md, contact_information)
+        job, sip, dataset_md_latest, contact_information)
     if sip is None:
-        return 1
+        raise ConvertDataverseError("Error adding Dataset files to METS")
 
+    # On success of the following two functions, the module will return None
+    # to JobContext which expects non-zero as a failure code only.
     sip = add_md_dir_to_structmap(sip)
     write_mets_to_file(sip, unit_path, output_md_path, output_md_name)
-
-    # Success code to pass back to Job.
-    return 0
 
 
 def get_latest_version_metadata(json_metadata):
@@ -472,28 +500,26 @@ def get_latest_version_metadata(json_metadata):
             "Some features of this method may be incompatible with "
             "Archivematica at present.")
         return datasetVersion
-    else:
-        return json_metadata.get("latestVersion")
+    return json_metadata.get("latestVersion")
 
 
-def map_dataverse(job):
+def init_convert_dataverse(job):
     """Extract the arguments provided to the script and call the primary
     function concerned with converting the Dataverse metadata JSON.
     """
     try:
         transfer_dir = job.args[1]
-        transfer_uuid = job.args[2]
-        logger.info("Convert Dataverse Structure with dir args: '%s' "
-                    "and transfer uuid: %s", transfer_dir, transfer_uuid)
-        return map_(job, unit_path=transfer_dir, unit_uuid=transfer_uuid)
+        logger.info("Convert Dataverse Structure with dir: '%s'", transfer_dir)
+        return convert_dataverse_to_mets(job, unit_path=transfer_dir)
     except IndexError:
-        logger.error(
-            "Problem with the supplied arguments to the function "
-            "len: %s", len(job.args))
-        return 1
+        convert_dv_msg = (
+            "Problem with the supplied arguments to the function len: {}"
+            .format(len(job.args)))
+        logger.error(convert_dv_msg)
+        raise ConvertDataverseError(convert_dv_msg)
 
 
 def call(jobs):
     for job in jobs:
         with job.JobContext(logger=logger):
-            job.set_status(map_dataverse(job))
+            job.set_status(init_convert_dataverse(job))

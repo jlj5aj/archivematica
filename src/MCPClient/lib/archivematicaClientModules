@@ -138,4 +138,4 @@ removeDirectories_v0.0 = remove_directories
 
 # Dataverse Scripts
 convertDataverseStructure_v0.0 = convert_dataverse_structure
-parseDataverse = parse_dataverse_mets
+parseDataverse_v0.0 = parse_dataverse_mets

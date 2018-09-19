@@ -1,6 +1,11 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+"""Parse the transfer METS file created as part of a Dataverse transfer and
+validate against the objects expected to be part of the SIP generated during
+transfer.
+"""
+
 import json
 import os
 import uuid
@@ -19,6 +24,10 @@ import metsrw
 
 logger = get_script_logger("archivematica.mcp.client.parse_dataverse_mets")
 transfer_objects_directory = "%transferDirectory%objects"
+
+
+class ParseDataverseError(Exception):
+    pass
 
 
 def get_db_objects(job, mets, transfer_uuid):
@@ -48,18 +57,17 @@ def get_db_objects(job, mets, transfer_uuid):
         try:
             item_path = os.path.join(transfer_objects_directory, entry.path)
             logger.info(
-                "Looking for for file type: '{}' using relative path: {}"
-                .format(entry.type, item_path))
+                "Looking for file type: '%s' using relative path: %s",
+                entry.type, item_path)
             f = File.objects.get(originallocation=item_path,
                                  transfer_id=transfer_uuid)
         except File.DoesNotExist:
             logger.info(
-                "Could not find file type: '{}' in the database: {}"
-                .format(entry.type, entry.path))
+                "Could not find file type: '%s' in the database: %s",
+                entry.type, entry.path)
         except File.MultipleObjectsReturned as e:
             logger.info("Multiple entries for `%s` found. Exception: %s",
                         entry.path, e)
-
         try:
             # Attempt to find the original location through just its filename
             # as it may be sitting in the root item/objects directory of the
@@ -67,33 +75,30 @@ def get_db_objects(job, mets, transfer_uuid):
             if f is None:
                 base_name = os.path.basename(entry.path)
                 item_path = os.path.join(transfer_objects_directory, base_name)
-                logger.info("Looking for for file type: '{}' using "
-                            "base name: {}".format(entry.type, item_path))
+                logger.info("Looking for file type: '%s' using "
+                            "base name: %s", entry.type, item_path)
                 f = File.objects.get(
                     originallocation=item_path,
                     transfer_id=transfer_uuid)
         except File.DoesNotExist:
             logger.error(
-                "Could not find file type: '{}' in the database: {}. "
-                "Checksum: '{}'"
-                .format(entry.type, base_name, entry.checksum))
+                "Could not find file type: '%s' in the database: %s. "
+                "Checksum: '%s'", entry.type, base_name, entry.checksum)
             return None
         except File.MultipleObjectsReturned as e:
             logger.info("Multiple entries for `%s` found. Exception: %s",
                         base_name, e)
             return None
-
         job.pyprint("Adding mapping dict [{}] entry: {}".format(entry, f))
         mapping[entry] = f
-
     return mapping
 
 
 def update_file_use(job, mapping):
     """
-    Update the file's USE for files in mets.
+    Update the file's use for files in mets.
 
-    :param mets: Parse METS file
+    :param mapping: Dataverse objects/use mapping from Database
     :return: None
     """
     for entry, f in mapping.items():
@@ -132,9 +137,10 @@ def add_external_agents(job, unit_path):
     return agent_id
 
 
-def create_derivatives(job, mapping, dataverse_agent_id):
+def create_db_entries(job, mapping, dataverse_agent_id):
     """
-    Create derivatives for derived tabular data.
+    Create event and derivatives entries for the derived tabular data in the
+    database.
     """
     for entry, f in mapping.items():
         if entry.derived_from and entry.use == 'derivative':
@@ -224,42 +230,42 @@ def verify_checksum(job, file_uuid, path, checksum, checksumtype,
     )
 
 
-def parse_(job, unit_path, unit_uuid):
+def parse_dataverse_mets(job, unit_path, unit_uuid):
     """Access the existing METS file and extract and validate its components.
     """
     dataverse_mets_path = os.path.join(unit_path, 'metadata', 'METS.xml')
     mets = metsrw.METSDocument.fromfile(dataverse_mets_path)
     mapping = get_db_objects(job, mets, unit_uuid)
     if mapping is None:
-        logger.error(
-            "Exiting. Returning the database objects for our Dataverse "
-            "files has failed.")
-        return 1
+        no_map = ("Exiting. Returning the database objects for our Dataverse "
+                  "files has failed.")
+        logger.error(no_map)
+        raise ParseDataverseError(no_map)
     update_file_use(job, mapping)
     agent = add_external_agents(job, unit_path)
-    create_derivatives(job, mapping, agent)
+    create_db_entries(job, mapping, agent)
     validate_checksums(job, mapping, unit_path)
-    return 0
 
 
-def parse_dataverse_mets(job):
+def init_parse_dataverse_mets(job):
     """Extract the arguments provided to the script and call the primary
     function concerned with parsing Dataverse METS.
     """
     try:
         transfer_dir = job.args[1]
         transfer_uuid = job.args[2]
-        logger.info("Parse Dataverse METS with dir args: '%s' and transfer "
+        logger.info("Parse Dataverse METS with dir: '%s' and transfer "
                     "uuid: %s", transfer_dir, transfer_uuid)
-        return parse_(job, transfer_dir, transfer_uuid)
+        return parse_dataverse_mets(job, transfer_dir, transfer_uuid)
     except IndexError:
-        logger.error(
-            "Problem with the supplied arguments to the function "
-            "len: %s", len(job.args))
-        return 1
+        arg_err = (
+            "Problem with the supplied arguments to the function len: %s",
+            len(job.args))
+        logger.error(arg_err)
+        raise ParseDataverseError(arg_err)
 
 
 def call(jobs):
     for job in jobs:
         with job.JobContext(logger=logger):
-            job.set_status(parse_dataverse_mets(job))
+            job.set_status(init_parse_dataverse_mets(job))
