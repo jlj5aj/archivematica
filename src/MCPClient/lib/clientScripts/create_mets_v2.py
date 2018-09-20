@@ -927,8 +927,9 @@ def createFileSec(job,
                     os.path.basename(f.originallocation))
                 globalState.dmdSecs.extend(dv_metadata)
                 ids = ' '.join([ds.get('ID') for ds in dv_metadata])
-                fileDiv.attrib['DMDID'] = fileDiv.attrib.get('DMDID', '') \
-                    + ' ' + ids
+                if ids != "":
+                    fileDiv.attrib['DMDID'] = \
+                        fileDiv.attrib.get('DMDID', '') + ids
 
             if GROUPID == "":
                 sharedVariablesAcrossModules.globalErrorCount += 1
